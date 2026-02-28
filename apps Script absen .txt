@@ -1,0 +1,324 @@
+
+function doGet(e) {
+  if (!e || !e.parameter) {
+    return ContentService.createTextOutput("No_Parameters");
+  }
+  Logger.log(JSON.stringify(e));
+  var result = "OK";
+  var sheet_id = "1ubk94nAjK1dFLOzyIWzOBGbmlxajbPCuIiyNZQHaKBA";
+  var sheet_UD = "User_Data";
+  var sheet_AT = "Kehadiran";
+  var ss = SpreadsheetApp.openById(sheet_id);
+  var shUser = ss.getSheetByName(sheet_UD);
+  var shAtc  = ss.getSheetByName(sheet_AT);
+  var sts_val = "";
+  var uid_val = "";
+
+  for (var p in e.parameter) {
+    var v = stripQuotes(e.parameter[p]);
+    if (p == "sts") sts_val = v;
+    if (p == "uid") uid_val = v;
+  }
+  if (sts_val == "reg") {
+    if (checkUID(sheet_id, sheet_UD, 2, uid_val)) {
+      result += ",regErr01";
+      return ContentService.createTextOutput(result);
+    }
+    var lastRow = shUser.getLastRow() + 1;
+    shUser.getRange(lastRow, 2).setValue(uid_val);
+    result += ",R_Successful";
+    return ContentService.createTextOutput(result);
+  }
+  if (sts_val == "atc") {
+    // === CEK UID TERDAFTAR ===
+    var FUID = findUID(sheet_id, sheet_UD, 2, uid_val);
+    if (FUID == -1) {
+      result += ",atcErr01";
+      return ContentService.createTextOutput(result);
+    }
+    var rowUser = FUID + 2;
+    var user_name    = shUser.getRange("A" + rowUser).getValue();
+    var user_posisi  = shUser.getRange("C" + rowUser).getValue();
+    var user_jabatan = shUser.getRange("D" + rowUser).getValue();
+    var now = new Date();
+    var todayKey = Utilities.formatDate(now, "Asia/Jakarta", "yyyy-MM-dd");
+    var timeStr  = Utilities.formatDate(now, "Asia/Jakarta", "HH:mm:ss");
+    var data = shAtc.getDataRange().getValues();
+    var mode = "time_in";
+    var targetRow = -1;
+    var TI_val = "";
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][1] == uid_val && data[i][4] instanceof Date) {
+        var rowDateKey = Utilities.formatDate(
+          data[i][4],
+          "Asia/Jakarta",
+          "yyyy-MM-dd"
+        );
+        if (rowDateKey == todayKey) {
+          if (data[i][6] == "") {
+            mode = "time_out";
+            targetRow = i + 1;
+            TI_val = data[i][5];
+            break;
+          } else {
+            mode = "finish";
+          }
+        }
+      }
+    }
+    if (mode == "time_in") {
+      shAtc.insertRows(2);
+      shAtc.getRange("A2").setValue(user_name);
+      shAtc.getRange("B2").setValue(uid_val);
+      shAtc.getRange("C2").setValue(user_posisi);
+      shAtc.getRange("D2").setValue(user_jabatan);
+      shAtc.getRange("E2").setValue(now);      
+      shAtc.getRange("F2").setValue(timeStr);  
+      shAtc.getRange("G2").setValue("");       
+      SpreadsheetApp.flush();
+      result += ",TI_Successful," + user_name + "," + todayKey + "," + timeStr;
+      return ContentService.createTextOutput(result);
+    }
+    if (mode == "time_out") {
+
+      shAtc.getRange("G" + targetRow).setValue(timeStr);
+
+      result += ",TO_Successful," + user_name + "," + todayKey + "," + TI_val + "," + timeStr;
+      return ContentService.createTextOutput(result);
+    }
+    if (mode == "finish") {
+      result += ",atcInf01";
+      return ContentService.createTextOutput(result);
+    }
+  }
+}
+function stripQuotes(value) {
+  return value.replace(/^["']|['"]$/g, "");
+}
+function findLastRow(id_sheet, name_sheet, name_column) {
+  var sheet = SpreadsheetApp.openById(id_sheet).getSheetByName(name_sheet);
+  var lastRow = sheet.getLastRow();
+  var range = sheet.getRange(name_column + lastRow);
+  return range.getValue() !== "" ? lastRow : range.getNextDataCell(SpreadsheetApp.Direction.UP).getRow();
+}
+function findUID(id_sheet, name_sheet, column_index, searchString) {
+  var sheet = SpreadsheetApp.openById(id_sheet).getSheetByName(name_sheet);
+  var values = sheet.getRange(2, column_index, sheet.getLastRow()).getValues();
+  return values.findIndex(searchString);
+}
+function checkUID(id_sheet, name_sheet, column_index, searchString) {
+  var sheet = SpreadsheetApp.openById(id_sheet).getSheetByName(name_sheet);
+  var values = sheet.getRange(2, column_index, sheet.getLastRow()).getValues();
+  var index = values.findIndex(searchString);
+  if (index != -1) {
+    sheet.getRange(index + 2, 3).setValue("UID sudah terdaftar");
+    return true;
+  }
+  return false;
+}
+Array.prototype.findIndex = function (search) {
+  if (search == "") return -1;
+  for (var i = 0; i < this.length; i++) {
+    if (this[i].toString().indexOf(search) > -1) return i;
+  }
+  return -1;
+};
+function rekapKehadiranDanClear() {
+  var ss = SpreadsheetApp.openById("1ubk94nAjK1dFLOzyIWzOBGbmlxajbPCuIiyNZQHaKBA");
+  var sheetAbsensi = ss.getSheetByName("Kehadiran");
+  var sheetRekap = ss.getSheetByName("Rekap_Kehadiran");
+  if (!sheetRekap) {
+    sheetRekap = ss.insertSheet("Rekap_Kehadiran");
+  }
+  var data = sheetAbsensi.getDataRange().getValues();
+  if (data.length <= 1) return;
+  sheetRekap.clear();
+  sheetRekap.appendRow([
+    "Nama",
+    "UID",
+    "Posisi",
+    "Jabatan",
+    "Total Kehadiran",
+    "Tanggal Masuk"
+  ]);
+  var rekap = {};
+  for (var i = 1; i < data.length; i++) {
+    var nama = data[i][0];
+    var uid = data[i][1];
+    var posisi = data[i][2];
+    var jabatan = data[i][3];
+    var tanggalRaw = data[i][4]; // kolom tanggal
+    if (!uid || !(tanggalRaw instanceof Date)) continue;
+    var tanggal = Utilities.formatDate(
+      tanggalRaw,
+      "Asia/Jakarta",
+      "dd/MM/yyyy"
+    );
+    if (!rekap[uid]) {
+      rekap[uid] = {
+        nama: nama,
+        posisi: posisi,
+        jabatan: jabatan,
+        total: 0,
+        tanggalSet: new Set()
+      };
+    }
+    rekap[uid].total++;
+    rekap[uid].tanggalSet.add(tanggal);
+  }
+  for (var u in rekap) {
+    sheetRekap.appendRow([
+      rekap[u].nama,
+      u,
+      rekap[u].posisi,
+      rekap[u].jabatan,
+      rekap[u].total,
+      Array.from(rekap[u].tanggalSet).join(", ")
+    ]);
+  }
+  var lastRow = sheetRekap.getLastRow();
+  var lastCol = sheetRekap.getLastColumn();
+  sheetRekap.getRange(1, 1, lastRow, lastCol)
+            .setBorder(true, true, true, true, true, true);
+  sheetRekap.getRange(1, 1, 1, lastCol)
+            .setFontWeight("bold")
+            .setBackground("#E9EEF3");
+  sheetRekap.autoResizeColumns(1, lastCol);
+  if (sheetAbsensi.getLastRow() > 1) {
+    sheetAbsensi.getRange(
+      2, 1,
+      sheetAbsensi.getLastRow() - 1,
+      sheetAbsensi.getLastColumn()
+    ).clearContent();
+  }
+  SpreadsheetApp.getUi().alert(
+    "Rekap selesai.\nTanggal masuk per orang berhasil ditampilkan.\nData Kehadiran telah dibersihkan."
+  );
+}
+function exportKehadiranPDF_Download() {
+  var ss = SpreadsheetApp.getActive();
+  var sheet = ss.getSheetByName("Kehadiran");
+  var sheetId = sheet.getSheetId();
+  var url = ss.getUrl().replace(/edit$/, "") +
+    "export?format=pdf" +
+    "&gid=" + sheetId +
+    "&size=A4" +
+    "&portrait=true" +
+    "&fitw=true" +
+    "&sheetnames=false" +
+    "&printtitle=false" +
+    "&pagenumbers=false" +
+    "&gridlines=false";
+  var html = `
+    <html>
+      <body style="font-family:Arial; text-align:center">
+        <h3>Export PDF Kehadiran</h3>
+        <a href="${url}" target="_blank"
+           style="
+             padding:12px 20px;
+             background:#1a73e8;
+             color:white;
+             text-decoration:none;
+             border-radius:6px;
+             font-size:14px;">
+          ⬇ Download PDF
+        </a>
+      </body>
+    </html>
+  `;
+  SpreadsheetApp.getUi().showModalDialog(
+    HtmlService.createHtmlOutput(html).setWidth(300).setHeight(180),
+    "Download PDF"
+  );
+}
+function isRekapReady() {
+  var ss = SpreadsheetApp.openById(
+    "1ubk94nAjK1dFLOzyIWzOBGbmlxajbPCuIiyNZQHaKBA"
+  );
+  var sheetRekap = ss.getSheetByName("Rekap_Kehadiran");
+  if (!sheetRekap) return false;
+  if (sheetRekap.getLastRow() <= 1) return false;
+  return true;
+}
+function buatSlipGaji() {
+  if (!isRekapReady()) {
+    SpreadsheetApp.getUi().alert(
+      "❌ Rekap belum dilakukan.\nSilakan rekap kehadiran terlebih dahulu."
+    );
+    return;
+  }
+  var ss = SpreadsheetApp.openById("1ubk94nAjK1dFLOzyIWzOBGbmlxajbPCuIiyNZQHaKBA");
+  var sheetRekap = ss.getSheetByName("Rekap_Kehadiran");
+  var sheetSlip = ss.getSheetByName("Slip_Gaji");
+  if (!sheetSlip) {
+    sheetSlip = ss.insertSheet("Slip_Gaji");
+  } else {
+    sheetSlip.clear();
+  }
+  sheetSlip.appendRow([
+    "Nama", "UID", "Posisi", "Jabatan",
+    "Total Hadir", "Gaji / Hari", "Total Gaji"
+  ]);
+  var GAJI_PER_HARI = 100000; // Rp 100.000
+  var data = sheetRekap.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    var nama = data[i][0];
+    var uid = data[i][1];
+    var posisi = data[i][2];
+    var jabatan = data[i][3];
+    var totalHadir = data[i][4];
+    if (!uid || !totalHadir) continue;
+    var totalGaji = totalHadir * GAJI_PER_HARI;
+    sheetSlip.appendRow([
+      nama,
+      uid,
+      posisi,
+      jabatan,
+      totalHadir,
+      GAJI_PER_HARI,
+      totalGaji
+    ]);
+  }
+  var lastRow = sheetSlip.getLastRow();
+  var lastCol = sheetSlip.getLastColumn();
+  sheetSlip.getRange(1, 1, lastRow, lastCol)
+            .setBorder(true, true, true, true, true, true);
+  sheetSlip.getRange(1, 1, 1, lastCol)
+            .setFontWeight("bold")
+            .setBackground("#E9EEF3");
+  sheetSlip.getRange(2, 6, lastRow - 1, 2)
+            .setNumberFormat('"Rp" #,##0');
+  sheetSlip.autoResizeColumns(1, lastCol);
+  SpreadsheetApp.getUi().alert("Slip gaji berhasil dibuat.");
+}
+function backupKehadiran() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sourceSheetName = "Kehadiran";
+  var sourceSheet = ss.getSheetByName(sourceSheetName);
+  if (!sourceSheet) {
+    throw new Error("Sheet 'Kehadiran' tidak ditemukan!");
+  }
+  var now = new Date();
+  var dateStr = Utilities.formatDate(
+    now,
+    "Asia/Jakarta",
+    "yyyy-MM-dd_HH-mm-ss"
+  );
+  var backupSheetName = "Backup_Kehadiran_" + dateStr;
+  var backupSheet = ss.insertSheet(backupSheetName);
+  var sourceRange = sourceSheet.getDataRange();
+  var values = sourceRange.getValues();
+  backupSheet
+    .getRange(1, 1, values.length, values[0].length)
+    .setValues(values);
+  backupSheet
+    .getRange(1, 1, 1, values[0].length)
+    .setFontWeight("bold");
+  backupSheet.getRange("E:E").setNumberFormat("dd/MM/yyyy");
+  backupSheet.getRange("F:F").setNumberFormat("HH:mm:ss");
+  backupSheet.getRange("G:G").setNumberFormat("HH:mm:ss");
+  backupSheet.autoResizeColumns(1, values[0].length);
+
+  SpreadsheetApp.flush();
+}
+
